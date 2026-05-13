@@ -1,0 +1,12 @@
+{
+  "name": "ai-pipeline-triage",
+  "version": "1.0.0",
+  "description": "E2E pipeline triage demo with Playwright and Claude",
+  "scripts": {
+    "test": "playwright test",
+    "test:report": "playwright show-report"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.44.0"
+  }
+}

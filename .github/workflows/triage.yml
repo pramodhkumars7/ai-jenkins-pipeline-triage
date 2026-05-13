@@ -1,0 +1,48 @@
+name: Pipeline Triage Agent
+
+on:
+  repository_dispatch:
+    types: [local-test-failure]
+
+permissions:
+  contents: read
+
+jobs:
+  triage:
+    name: Analyze failure and notify
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      # ── STEP 1: Just print the payload — verify logs are arriving ──────────
+      - name: Print received payload
+        run: |
+          echo "==============================="
+          echo " Payload received from local machine"
+          echo "==============================="
+          echo "Job     : ${{ github.event.client_payload.job }}"
+          echo "Machine : ${{ github.event.client_payload.machine }}"
+          echo "Branch  : ${{ github.event.client_payload.branch }}"
+          echo "Commit  : ${{ github.event.client_payload.commit }}"
+          echo ""
+          echo "--- LOG SNIPPET ---"
+          echo '${{ github.event.client_payload.log }}' | head -50
+          echo "==============================="
+
+      # ── STEP 2: Run triage agent (uncomment when ready) ───────────────────
+      # - name: Set up Python
+      #   uses: actions/setup-python@v5
+      #   with:
+      #     python-version: '3.12'
+      #
+      # - name: Install Python dependencies
+      #   run: pip install openai requests
+      #
+      # - name: Run triage agent
+      #   env:
+      #     GITHUB_TOKEN:  ${{ secrets.GITHUB_TOKEN }}
+      #     TEAMS_WEBHOOK: ${{ secrets.TEAMS_WEBHOOK }}
+      #     EVENT_PAYLOAD: ${{ toJson(github.event.client_payload) }}
+      #   run: python triage_agent.py

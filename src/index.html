@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Home | MyApp</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: sans-serif; background: #f0f4f8; display: flex; flex-direction: column; align-items: center; }
+    nav { width: 100%; background: #1a202c; padding: 1rem 2rem; display: flex; justify-content: space-between; align-items: center; }
+    nav .brand { color: #fff; font-size: 1.4rem; font-weight: bold; }
+    nav a { color: #a0aec0; text-decoration: none; margin-left: 1.5rem; }
+    nav a:hover { color: #fff; }
+    .hero { margin-top: 5rem; text-align: center; }
+    .hero h1 { font-size: 2.5rem; color: #2d3748; }
+    .hero p { margin-top: 1rem; color: #718096; font-size: 1.1rem; }
+    .btn { display: inline-block; margin-top: 2rem; padding: 0.8rem 2rem; background: #3182ce; color: #fff; border-radius: 6px; text-decoration: none; font-size: 1rem; }
+    .btn:hover { background: #2b6cb0; }
+    .features { display: flex; gap: 2rem; margin-top: 4rem; }
+    .card { background: #fff; padding: 1.5rem; border-radius: 8px; box-shadow: 0 1px 4px rgba(0,0,0,0.1); width: 200px; text-align: center; }
+    .card h3 { color: #2d3748; }
+    .card p { color: #718096; margin-top: 0.5rem; font-size: 0.9rem; }
+  </style>
+</head>
+<body>
+  <nav>
+    <span class="brand">MyApp</span>
+    <div>
+      <a href="index.html">Home</a>
+      <a href="login.html">Login</a>
+    </div>
+  </nav>
+
+  <div class="hero">
+    <h1>Welcome to MyApp</h1>
+    <p>A simple demo application for E2E pipeline triage testing.</p>
+    <a class="btn" id="get-started-btn" href="login.html">Get Started</a>
+  </div>
+
+  <div class="features">
+    <div class="card">
+      <h3>Fast</h3>
+      <p>Optimized for speed and reliability.</p>
+    </div>
+    <div class="card">
+      <h3>Secure</h3>
+      <p>Built with security best practices.</p>
+    </div>
+    <div class="card">
+      <h3>Simple</h3>
+      <p>Clean and intuitive interface.</p>
+    </div>
+  </div>
+</body>
+</html>

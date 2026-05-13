@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Login | MyApp</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: sans-serif; background: #f0f4f8; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; }
+    .card { background: #fff; padding: 2.5rem; border-radius: 10px; box-shadow: 0 2px 8px rgba(0,0,0,0.12); width: 360px; }
+    h2 { color: #2d3748; margin-bottom: 1.5rem; text-align: center; }
+    label { display: block; margin-bottom: 0.3rem; color: #4a5568; font-size: 0.9rem; }
+    input { width: 100%; padding: 0.6rem 0.8rem; border: 1px solid #cbd5e0; border-radius: 5px; font-size: 1rem; margin-bottom: 1.2rem; }
+    input:focus { outline: none; border-color: #3182ce; }
+    .error { color: #e53e3e; font-size: 0.85rem; margin-bottom: 1rem; display: none; }
+    .btn { width: 100%; padding: 0.75rem; background: #3182ce; color: #fff; border: none; border-radius: 6px; font-size: 1rem; cursor: pointer; }
+    .btn:hover { background: #2b6cb0; }
+    .footer-link { text-align: center; margin-top: 1rem; font-size: 0.85rem; color: #718096; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h2>Sign in to MyApp</h2>
+    <p id="error-msg" class="error">Invalid username or password.</p>
+    <form id="login-form" onsubmit="handleLogin(event)">
+      <label for="username">Username</label>
+      <input type="text" id="username" placeholder="Enter username" autocomplete="username" />
+
+      <label for="password">Password</label>
+      <input type="password" id="password" placeholder="Enter password" autocomplete="current-password" />
+
+      <button class="btn" id="login-btn" type="submit">Login</button>
+    </form>
+    <div class="footer-link">Don't have an account? <a href="index.html">Go back</a></div>
+  </div>
+
+  <script>
+    function handleLogin(e) {
+      e.preventDefault();
+      const user = document.getElementById('username').value;
+      const pass = document.getElementById('password').value;
+      if (user === 'admin' && pass === 'password123') {
+        window.location.href = 'dashboard.html';
+      } else {
+        document.getElementById('error-msg').style.display = 'block';
+      }
+    }
+  </script>
+</body>
+</html>

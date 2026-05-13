@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Dashboard | MyApp</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: sans-serif; background: #f0f4f8; }
+    nav { width: 100%; background: #1a202c; padding: 1rem 2rem; display: flex; justify-content: space-between; align-items: center; }
+    nav .brand { color: #fff; font-size: 1.4rem; font-weight: bold; }
+    nav .user-info { color: #a0aec0; font-size: 0.9rem; }
+    .container { max-width: 900px; margin: 2rem auto; padding: 0 1rem; }
+    h1 { color: #2d3748; margin-bottom: 1.5rem; }
+    .stats { display: flex; gap: 1.5rem; margin-bottom: 2rem; }
+    .stat-card { background: #fff; padding: 1.5rem; border-radius: 8px; box-shadow: 0 1px 4px rgba(0,0,0,0.1); flex: 1; text-align: center; }
+    .stat-card .value { font-size: 2rem; font-weight: bold; color: #3182ce; }
+    .stat-card .label { color: #718096; font-size: 0.85rem; margin-top: 0.3rem; }
+    table { width: 100%; background: #fff; border-radius: 8px; box-shadow: 0 1px 4px rgba(0,0,0,0.1); border-collapse: collapse; }
+    th, td { padding: 0.9rem 1rem; text-align: left; border-bottom: 1px solid #e2e8f0; }
+    th { color: #4a5568; font-size: 0.85rem; background: #f7fafc; }
+    td { color: #2d3748; }
+    .badge { display: inline-block; padding: 0.2rem 0.6rem; border-radius: 12px; font-size: 0.75rem; }
+    .badge.success { background: #c6f6d5; color: #276749; }
+    .badge.pending { background: #fefcbf; color: #744210; }
+    .badge.failed  { background: #fed7d7; color: #9b2c2c; }
+  </style>
+</head>
+<body>
+  <nav>
+    <span class="brand">MyApp</span>
+    <span class="user-info" id="user-greeting">Welcome, admin</span>
+  </nav>
+
+  <div class="container">
+    <h1>Dashboard</h1>
+
+    <div class="stats" id="stats-section">
+      <div class="stat-card">
+        <div class="value" id="total-users">1,240</div>
+        <div class="label">Total Users</div>
+      </div>
+      <div class="stat-card">
+        <div class="value" id="active-sessions">87</div>
+        <div class="label">Active Sessions</div>
+      </div>
+      <div class="stat-card">
+        <div class="value" id="error-rate">0.4%</div>
+        <div class="label">Error Rate</div>
+      </div>
+    </div>
+
+    <table id="recent-activity">
+      <thead>
+        <tr>
+          <th>Event</th>
+          <th>User</th>
+          <th>Time</th>
+          <th>Status</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td>Login</td><td>alice</td><td>2 mins ago</td><td><span class="badge success">Success</span></td>
+        </tr>
+        <tr>
+          <td>Export</td><td>bob</td><td>5 mins ago</td><td><span class="badge pending">Pending</span></td>
+        </tr>
+        <tr>
+          <td>Delete</td><td>carol</td><td>12 mins ago</td><td><span class="badge failed">Failed</span></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</body>
+</html>
