@@ -88,7 +88,6 @@ RESPONSE=$(curl -s -w "\nHTTP_STATUS:%{http_code}" -X POST \
     \"event_type\": \"local-test-failure\",
     \"client_payload\": {
       \"job\": \"local-playwright-e2e\",
-      \"machine\": \"$(hostname)\",
       \"branch\": \"$(git -C "$SCRIPT_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)\",
       \"commit\": \"$(git -C "$SCRIPT_DIR" rev-parse --short HEAD 2>/dev/null || echo unknown)\",
       \"gist_id\": \"$GIST_ID\"

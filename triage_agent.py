@@ -1,78 +1,117 @@
 """
-Triage agent: fetches full log from GitHub Gist, calls a GitHub-hosted model
-(no external API key — uses GITHUB_TOKEN), then notifies Teams.
+Pipeline Triage Agent
+  1. Reads dispatch payload (job metadata + gist_id)
+  2. Fetches full log from GitHub Gist using PAT_TOKEN
+  3. Deletes the Gist immediately (no accumulation)
+  4. Calls GitHub Models (gpt-4o-mini) via GITHUB_TOKEN — no external API key
+  5. Prints RCA to console
 """
 import os
 import json
 import urllib.request
-import requests
 from openai import OpenAI
 
-client = OpenAI(
-    base_url="https://models.inference.ai.azure.com",
-    api_key=os.environ["GITHUB_TOKEN"],
-)
 
-def fetch_log_from_gist(gist_id: str, token: str) -> str:
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+def section(title: str):
+    print(f"\n{'=' * 60}")
+    print(f"  {title}")
+    print('=' * 60)
+
+
+def fetch_and_delete_gist(gist_id: str, pat_token: str) -> str:
+    """Fetches the Gist content then immediately deletes it."""
     headers = {
-        "Authorization": f"token {token}",
+        "Authorization": f"token {pat_token}",   # value never printed
         "Accept": "application/vnd.github.v3+json"
     }
+    url = f"https://api.github.com/gists/{gist_id}"
+
     # Fetch
-    req = urllib.request.Request(f"https://api.github.com/gists/{gist_id}", headers=headers)
-    with urllib.request.urlopen(req) as resp:
+    with urllib.request.urlopen(
+        urllib.request.Request(url, headers=headers)
+    ) as resp:
         data = json.loads(resp.read())
+
     content = list(data["files"].values())[0]["content"]
 
-    # Delete immediately after reading — no Gist accumulation
-    del_req = urllib.request.Request(
-        f"https://api.github.com/gists/{gist_id}",
-        headers=headers,
-        method="DELETE"
+    # Delete
+    urllib.request.urlopen(
+        urllib.request.Request(url, headers=headers, method="DELETE")
     )
-    urllib.request.urlopen(del_req)
-    print(f"Gist {gist_id} deleted after reading.")
 
     return content
 
+
+# ── Main ──────────────────────────────────────────────────────────────────────
+
 def main():
     payload   = json.loads(os.environ["EVENT_PAYLOAD"])
-    pat_token = os.environ["PAT_TOKEN"]   # PAT with gist scope
-    gist_id   = payload.get("gist_id", "")
-    job      = payload.get("job", "unknown-job")
-    machine  = payload.get("machine", "unknown")
-    branch   = payload.get("branch", "unknown")
-    commit   = payload.get("commit", "unknown")
+    pat_token = os.environ["PAT_TOKEN"]       # used for Gist, never printed
+    gh_token  = os.environ["GITHUB_TOKEN"]    # used for Models, never printed
+
+    gist_id = payload.get("gist_id", "")
+    job     = payload.get("job",     "unknown-job")
+    machine = payload.get("machine", "unknown")
+    branch  = payload.get("branch",  "unknown")
+    commit  = payload.get("commit",  "unknown")
+
+    # ── 1. Print metadata (no secrets) ───────────────────────────────────────
+    section("Payload received from local machine")
+    print(f"  Job     : {job}")
+    print(f"  Machine : {machine}")
+    print(f"  Branch  : {branch}")
+    print(f"  Commit  : {commit}")
+    print(f"  Gist ID : {gist_id}")
 
     if not gist_id:
-        print("No gist_id in payload — cannot fetch log.")
+        print("\nERROR: No gist_id in payload — cannot fetch log.")
         return
 
-    print(f"Fetching full log from Gist {gist_id}...")
-    log = fetch_log_from_gist(gist_id, pat_token)
-    print(f"Log fetched: {len(log.splitlines())} lines")
+    # ── 2. Fetch full log from Gist + delete it ───────────────────────────────
+    section("Fetching log from Gist")
+    log = fetch_and_delete_gist(gist_id, pat_token)
+    line_count = len(log.splitlines())
+    print(f"  Log fetched  : {line_count} lines")
+    print(f"  Gist deleted : {gist_id}")
 
-    prompt = f"""You are a senior QA/DevOps engineer. A Playwright E2E test suite just failed.
+    # ── 3. Print the raw log ──────────────────────────────────────────────────
+    section(f"Full test failure log ({line_count} lines)")
+    print(log)
 
-Context:
+    # ── 4. Call GitHub Models for RCA ─────────────────────────────────────────
+    section("Calling GitHub Models (gpt-4o-mini) for analysis")
+
+    client = OpenAI(
+        base_url="https://models.inference.ai.azure.com",
+        api_key=gh_token,    # not printed
+    )
+
+    prompt = f"""You are a senior QA/DevOps engineer reviewing a Playwright E2E test failure.
+
+Run context:
 - Job    : {job}
-- Machine: {machine}
 - Branch : {branch}
-- Commit : {commit}
 
-Analyze the full failure log and provide:
-1. **Root Cause** – 2-3 sentences on what failed and why.
-2. **Affected Tests** – bullet list of failing test names.
-3. **Recommended Fix** – concrete steps a developer can follow.
-4. **Confidence** – High / Medium / Low.
+Analyze the failure log below and respond with:
 
-Be concise. Use Markdown.
+## Root Cause
+2-3 sentences explaining what failed and why.
+
+## Affected Tests
+Bullet list of each failing test name.
+
+## Recommended Fix
+Numbered, concrete steps a developer can follow immediately.
+
+## Confidence
+High / Medium / Low — and one sentence why.
 
 --- FULL FAILURE LOG ---
 {log}
 """
 
-    print("Calling GitHub Models for RCA...")
     response = client.chat.completions.create(
         model="gpt-4o-mini",
         messages=[{"role": "user", "content": prompt}],
@@ -80,28 +119,10 @@ Be concise. Use Markdown.
     )
     rca = response.choices[0].message.content
 
-    # ── Teams notification ────────────────────────────────────────────────────
-    teams_webhook = os.environ.get("TEAMS_WEBHOOK")
-    if teams_webhook:
-        teams_payload = {
-            "@type": "MessageCard",
-            "@context": "http://schema.org/extensions",
-            "themeColor": "FF0000",
-            "summary": f"Pipeline Failure — {job}",
-            "sections": [{
-                "activityTitle": f"Pipeline Failure: `{job}`",
-                "activitySubtitle": f"Branch: `{branch}` | Commit: `{commit}` | Machine: `{machine}`",
-                "text": rca,
-                "markdown": True
-            }]
-        }
-        r = requests.post(teams_webhook, json=teams_payload)
-        print(f"Teams notified: HTTP {r.status_code}")
-    else:
-        print("TEAMS_WEBHOOK not set — skipping Teams notification.")
-
-    print("\n=== RCA ===\n")
+    # ── 5. Print RCA to console ───────────────────────────────────────────────
+    section("RCA & Recommended Fix")
     print(rca)
+    section("Triage complete")
 
 
 if __name__ == "__main__":

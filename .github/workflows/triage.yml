@@ -13,78 +13,26 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      # ── Step 1: Checkout so triage_agent.py is available ──────────────────
       - name: Checkout repo
         uses: actions/checkout@v4
 
-      # ── STEP 1: Fetch full log from Gist and print it ─────────────────────
-      - name: Print received payload and full log
+      # ── Step 2: Install Python deps ────────────────────────────────────────
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install openai
+
+      # ── Step 3: Run triage agent ───────────────────────────────────────────
+      # GITHUB_TOKEN  → GitHub Models (auto-injected, no setup needed)
+      # PAT_TOKEN     → Gist fetch + delete  (add in repo Settings → Secrets)
+      # EVENT_PAYLOAD → metadata + gist_id sent from local machine
+      - name: Run triage agent
         env:
-          GITHUB_TOKEN:  ${{ secrets.GITHUB_TOKEN }}   # for GitHub Models
-          PAT_TOKEN:     ${{ secrets.PAT_TOKEN }}       # for Gist fetch/delete (needs gist scope)
+          GITHUB_TOKEN:  ${{ secrets.GITHUB_TOKEN }}
+          PAT_TOKEN:     ${{ secrets.PAT_TOKEN }}
           EVENT_PAYLOAD: ${{ toJson(github.event.client_payload) }}
-        run: |
-          python3 - <<'EOF'
-          import os, json, urllib.request
-
-          p         = json.loads(os.environ["EVENT_PAYLOAD"])
-          pat_token = os.environ["PAT_TOKEN"]     # PAT with gist scope — fetches/deletes Gist
-          gist_id   = p.get("gist_id", "")
-
-          print("=" * 60)
-          print("  Payload received from local machine")
-          print("=" * 60)
-          print(f"  Job     : {p.get('job', 'N/A')}")
-          print(f"  Machine : {p.get('machine', 'N/A')}")
-          print(f"  Branch  : {p.get('branch', 'N/A')}")
-          print(f"  Commit  : {p.get('commit', 'N/A')}")
-          print(f"  Gist ID : {gist_id}")
-          print()
-
-          if not gist_id:
-              print("No gist_id in payload.")
-          else:
-              gist_headers = {
-                  "Authorization": f"token {pat_token}",
-                  "Accept": "application/vnd.github.v3+json"
-              }
-
-              # Fetch full log from Gist using PAT
-              req = urllib.request.Request(
-                  f"https://api.github.com/gists/{gist_id}",
-                  headers=gist_headers
-              )
-              with urllib.request.urlopen(req) as resp:
-                  gist_data = json.loads(resp.read())
-
-              log = list(gist_data["files"].values())[0]["content"]
-              lines = log.splitlines()
-              print(f"--- FULL LOG ({len(lines)} lines) ---")
-              print(log)
-              print("=" * 60)
-
-              # Delete Gist immediately after reading
-              del_req = urllib.request.Request(
-                  f"https://api.github.com/gists/{gist_id}",
-                  headers=gist_headers,
-                  method="DELETE"
-              )
-              urllib.request.urlopen(del_req)
-              print(f"Gist {gist_id} deleted after reading.")
-          EOF
-
-      # ── STEP 2: Run triage agent (uncomment when ready) ───────────────────
-      # - name: Set up Python
-      #   uses: actions/setup-python@v5
-      #   with:
-      #     python-version: '3.12'
-      #
-      # - name: Install Python dependencies
-      #   run: pip install openai requests
-      #
-      # - name: Run triage agent
-      #   env:
-      #     GITHUB_TOKEN:  ${{ secrets.GITHUB_TOKEN }}
-      #     PAT_TOKEN:     ${{ secrets.PAT_TOKEN }}
-      #     TEAMS_WEBHOOK: ${{ secrets.TEAMS_WEBHOOK }}
-      #     EVENT_PAYLOAD: ${{ toJson(github.event.client_payload) }}
-      #   run: python triage_agent.py
+        run: python triage_agent.py
