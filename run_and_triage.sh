@@ -1,12 +1,13 @@
 #!/bin/bash
 # Runs Playwright tests locally. On failure:
-#   1. Uploads full log to a secret GitHub Gist (no size limit)
-#   2. Sends Gist ID to GitHub Actions via repository_dispatch
+#   1. Uploads full log to a secret GitHub Gist using YOUR OWN PAT from .env
+#   2. Sends the Gist raw URL (no auth needed to read) to GitHub Actions
+#   3. Cleans up the previous run's Gist automatically
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# triage-logs/, NOT test-results/ — Playwright wipes test-results/ on every run
 LOG_DIR="$SCRIPT_DIR/triage-logs"
 LOG_FILE="$LOG_DIR/run.log"
+LAST_GIST_FILE="$SCRIPT_DIR/.triage-last-gist"   # stores previous gist_id for cleanup
 
 # ── Load .env ─────────────────────────────────────────────────────────────────
 if [ -f "$SCRIPT_DIR/.env" ]; then
@@ -39,18 +40,29 @@ fi
 LINE_COUNT=$(wc -l < "$LOG_FILE" | tr -d ' ')
 echo "[2/4] Tests failed ($LINE_COUNT lines). Uploading full log to GitHub Gist..."
 
-# Verify token has gist scope before attempting upload
+# Verify token has gist scope
 TOKEN_SCOPES=$(curl -s -I \
   -H "Authorization: token ${GITHUB_TOKEN}" \
   https://api.github.com/user | grep -i "x-oauth-scopes" | tr -d '\r')
 echo "      Token scopes: ${TOKEN_SCOPES:-none detected}"
 if ! echo "$TOKEN_SCOPES" | grep -qi "gist"; then
   echo "      ERROR: GITHUB_TOKEN is missing 'gist' scope."
-  echo "      Go to github.com/settings/tokens → edit token → tick 'gist' → regenerate → update .env"
+  echo "      Go to github.com/settings/tokens → edit token → tick 'gist' → update .env"
   exit 1
 fi
 
-# Upload the entire log file to a secret Gist — no size limit
+# Delete the previous run's Gist before creating a new one (keeps your account clean)
+if [ -f "$LAST_GIST_FILE" ]; then
+  LAST_GIST_ID=$(cat "$LAST_GIST_FILE")
+  curl -s -X DELETE \
+    -H "Authorization: token ${GITHUB_TOKEN}" \
+    -H "Accept: application/vnd.github.v3+json" \
+    "https://api.github.com/gists/${LAST_GIST_ID}" > /dev/null
+  echo "      Cleaned up previous Gist: $LAST_GIST_ID"
+  rm "$LAST_GIST_FILE"
+fi
+
+# Upload full log to a new secret Gist
 LOG_CONTENT=$(python3 -c "import sys,json; print(json.dumps(open('$LOG_FILE').read()))")
 TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
@@ -68,17 +80,26 @@ GIST_RESPONSE=$(curl -s -X POST \
     }
   }")
 
-GIST_ID=$(echo "$GIST_RESPONSE" | python3 -c "import sys,json; d=json.loads(sys.stdin.read()); print(d.get('id',''))" 2>/dev/null)
-GIST_URL=$(echo "$GIST_RESPONSE" | python3 -c "import sys,json; d=json.loads(sys.stdin.read()); print(d.get('html_url',''))" 2>/dev/null)
+GIST_ID=$(echo "$GIST_RESPONSE" | python3 -c \
+  "import sys,json; d=json.loads(sys.stdin.read()); print(d.get('id',''))" 2>/dev/null)
+
+# raw_url requires NO authentication — works for any reader, any account
+GIST_RAW_URL=$(echo "$GIST_RESPONSE" | python3 -c \
+  "import sys,json; d=json.loads(sys.stdin.read()); f=list(d.get('files',{}).values()); print(f[0].get('raw_url','') if f else '')" 2>/dev/null)
+
+GIST_HTML_URL=$(echo "$GIST_RESPONSE" | python3 -c \
+  "import sys,json; d=json.loads(sys.stdin.read()); print(d.get('html_url',''))" 2>/dev/null)
 
 if [ -z "$GIST_ID" ]; then
   echo "      ERROR: Gist upload failed. Response: $GIST_RESPONSE"
   exit "$TEST_EXIT"
 fi
 
-echo "      Gist created: $GIST_URL"
+# Remember this Gist ID so the NEXT run can clean it up
+echo "$GIST_ID" > "$LAST_GIST_FILE"
+echo "      Gist created: $GIST_HTML_URL"
 
-echo "[3/4] Sending Gist ID to GitHub Actions..."
+echo "[3/4] Sending raw log URL to GitHub Actions..."
 
 RESPONSE=$(curl -s -w "\nHTTP_STATUS:%{http_code}" -X POST \
   -H "Authorization: token ${GITHUB_TOKEN}" \
@@ -90,7 +111,7 @@ RESPONSE=$(curl -s -w "\nHTTP_STATUS:%{http_code}" -X POST \
       \"job\": \"local-playwright-e2e\",
       \"branch\": \"$(git -C "$SCRIPT_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)\",
       \"commit\": \"$(git -C "$SCRIPT_DIR" rev-parse --short HEAD 2>/dev/null || echo unknown)\",
-      \"gist_id\": \"$GIST_ID\"
+      \"gist_raw_url\": \"$GIST_RAW_URL\"
     }
   }")
 
@@ -100,7 +121,7 @@ BODY=$(echo "$RESPONSE" | grep -v "HTTP_STATUS:")
 echo "[4/4] curl response: HTTP $HTTP_STATUS"
 
 if [ "$HTTP_STATUS" -eq 204 ]; then
-  echo "      Dispatch sent. Full log: $GIST_URL"
+  echo "      Dispatch sent. Full log: $GIST_HTML_URL"
   echo "      Actions: https://github.com/${GITHUB_REPO}/actions"
 else
   echo "      ERROR: Dispatch failed. Body: $BODY"

@@ -1,10 +1,10 @@
 """
 Pipeline Triage Agent
-  1. Reads dispatch payload (job metadata + gist_id)
-  2. Fetches full log from GitHub Gist using PAT_TOKEN
-  3. Deletes the Gist immediately (no accumulation)
-  4. Calls GitHub Models (gpt-4o-mini) via GITHUB_TOKEN — no external API key
-  5. Prints RCA to console
+  1. Reads dispatch payload (job metadata + gist_raw_url)
+  2. Fetches full log from the raw Gist URL — no auth needed
+  3. Calls GitHub Models (gpt-4o-mini) via auto-injected GITHUB_TOKEN
+  4. Prints RCA to console
+  5. Sends Adaptive Card to Teams
 """
 import os
 import json
@@ -21,61 +21,39 @@ def section(title: str):
     print('=' * 60)
 
 
-def fetch_and_delete_gist(gist_id: str, pat_token: str) -> str:
-    """Fetches the Gist content then immediately deletes it."""
-    headers = {
-        "Authorization": f"token {pat_token}",   # value never printed
-        "Accept": "application/vnd.github.v3+json"
-    }
-    url = f"https://api.github.com/gists/{gist_id}"
-
-    # Fetch
-    with urllib.request.urlopen(
-        urllib.request.Request(url, headers=headers)
-    ) as resp:
-        data = json.loads(resp.read())
-
-    content = list(data["files"].values())[0]["content"]
-
-    # Delete
-    urllib.request.urlopen(
-        urllib.request.Request(url, headers=headers, method="DELETE")
-    )
-
-    return content
+def fetch_log(raw_url: str) -> str:
+    """Fetches log from Gist raw URL — no authentication required."""
+    with urllib.request.urlopen(raw_url) as resp:
+        return resp.read().decode("utf-8")
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
-    payload   = json.loads(os.environ["EVENT_PAYLOAD"])
-    pat_token = os.environ["PAT_TOKEN"]       # used for Gist, never printed
-    gh_token  = os.environ["GITHUB_TOKEN"]    # used for Models, never printed
+    payload      = json.loads(os.environ["EVENT_PAYLOAD"])
+    gh_token     = os.environ["GITHUB_TOKEN"]   # for GitHub Models, never printed
 
-    gist_id = payload.get("gist_id", "")
-    job     = payload.get("job",     "unknown-job")
-    machine = payload.get("machine", "unknown")
-    branch  = payload.get("branch",  "unknown")
-    commit  = payload.get("commit",  "unknown")
+    gist_raw_url = payload.get("gist_raw_url", "")
+    job          = payload.get("job",     "unknown-job")
+    branch       = payload.get("branch",  "unknown")
+    commit       = payload.get("commit",  "unknown")
 
     # ── 1. Print metadata (no secrets) ───────────────────────────────────────
     section("Payload received from local machine")
-    print(f"  Job     : {job}")
-    print(f"  Machine : {machine}")
-    print(f"  Branch  : {branch}")
-    print(f"  Commit  : {commit}")
-    print(f"  Gist ID : {gist_id}")
+    print(f"  Job    : {job}")
+    print(f"  Branch : {branch}")
+    print(f"  Commit : {commit}")
 
-    if not gist_id:
-        print("\nERROR: No gist_id in payload — cannot fetch log.")
+    if not gist_raw_url:
+        print("\nERROR: No gist_raw_url in payload — cannot fetch log.")
         return
 
-    # ── 2. Fetch full log from Gist + delete it ───────────────────────────────
+    # ── 2. Fetch log from raw Gist URL (no auth) ──────────────────────────────
     section("Fetching log from Gist")
-    log = fetch_and_delete_gist(gist_id, pat_token)
+    log = fetch_log(gist_raw_url)
     line_count = len(log.splitlines())
-    print(f"  Log fetched  : {line_count} lines")
-    print(f"  Gist deleted : {gist_id}")
+    print(f"  Log fetched : {line_count} lines")
+    print(f"  Note        : Gist will be auto-deleted on the next local run")
 
     # ── 3. Print the raw log ──────────────────────────────────────────────────
     section(f"Full test failure log ({line_count} lines)")
@@ -86,7 +64,7 @@ def main():
 
     client = OpenAI(
         base_url="https://models.inference.ai.azure.com",
-        api_key=gh_token,    # not printed
+        api_key=gh_token,   # not printed
     )
 
     prompt = f"""You are a senior QA/DevOps engineer reviewing a Playwright E2E test failure.
@@ -132,7 +110,6 @@ High / Medium / Low — and one sentence why.
     if not teams_webhook:
         print("  TEAMS_WEBHOOK not set — skipping Teams notification.")
     else:
-        # Adaptive Card — works with Teams Workflows webhook
         view_action = f"\n\n[View Actions Run]({actions_url})" if actions_url else ""
         card = {
             "type": "message",
