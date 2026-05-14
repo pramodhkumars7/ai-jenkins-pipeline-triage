@@ -2,7 +2,7 @@
 Pipeline Triage Agent
   1. Reads dispatch payload (job metadata + gist_raw_url + category)
   2. Fetches full log from the raw Gist URL — no auth needed
-  3. Calls GitHub Models (gpt-4o-mini) with tool-calling (check_duplicate_issue,
+  3. Calls GitHub Models (gpt-4o) with tool-calling (check_duplicate_issue,
      add_issue_comment, create_github_issue)
   4. Prints RCA to console
   5. Sends Adaptive Card to Teams
@@ -99,7 +99,7 @@ def dispatch_tool(name: str, args: dict, token: str) -> str:
 def run_agent_loop(client, messages: list, token: str) -> str:
     while True:
         resp = client.chat.completions.create(
-            model="gpt-4o-mini",
+            model="gpt-4o",
             messages=messages,
             tools=TOOLS,
             tool_choice="auto",

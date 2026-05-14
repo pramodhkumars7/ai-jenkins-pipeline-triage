@@ -14,7 +14,7 @@ Local Machine                              GitHub Actions (pipeline-failure even
   category: "playwright-e2e"                 ▼
                                            Python triage_agent.py
 ./simulate_eks_failure.sh    ─dispatch─►    ├─ Fetches log from Gist raw URL
-  Synthetic k8s log                         ├─ Calls GitHub Models (gpt-4o-mini)
+  Synthetic k8s log                         ├─ Calls GitHub Models (gpt-4o)
   category: "eks-deploy"                    ├─ Tool-calling loop:
                                              │    check_duplicate_issue
                                              │    create_github_issue / add_issue_comment
@@ -178,4 +178,4 @@ Go to **Settings → Secrets and variables → Actions → New repository secret
 
 - Each developer uses their own PAT in `.env` — no shared credentials
 - GitHub Gists are automatically cleaned up: each run deletes the previous run's Gist before creating a new one
-- The triage agent uses `gpt-4o-mini` from GitHub Models — no external API key needed
+- The triage agent uses `gpt-4o` from GitHub Models — no external API key needed
