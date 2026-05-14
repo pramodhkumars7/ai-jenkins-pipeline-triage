@@ -1,24 +1,29 @@
 # AI Pipeline Triage Agent
 
-Runs Playwright E2E tests locally. On failure, uploads the full log to a GitHub Gist and triggers a GitHub Actions workflow that uses a GitHub-hosted AI model to generate a Root Cause Analysis (RCA), then posts it to a Microsoft Teams channel.
+Simulates CI/CD pipeline failures (Playwright E2E tests and EKS deployments), uploads failure logs to GitHub Gists, and triggers a GitHub Actions workflow that uses an AI agent to generate a Root Cause Analysis (RCA), auto-create GitHub Issues, and post results to Microsoft Teams.
 
 ---
 
 ## How it works
 
 ```
-Local Machine
-  └── ./run_and_triage.sh
-        ├── runs Playwright tests
-        ├── on failure → uploads log to secret GitHub Gist (your PAT)
-        └── triggers GitHub Actions via repository_dispatch
-
-GitHub Actions
-  └── triage_agent.py
-        ├── fetches full log from Gist raw URL (no auth needed)
-        ├── calls GitHub Models (gpt-4o-mini) for RCA
-        ├── prints RCA to Actions console
-        └── sends Adaptive Card to Teams channel
+Local Machine                              GitHub Actions (pipeline-failure event)
+─────────────                              ──────────────────────────────────────
+./run_and_triage.sh          ─dispatch─►  triage.yml
+  Playwright E2E tests                       │
+  category: "playwright-e2e"                 ▼
+                                           Try: gh copilot extension (primary)
+./simulate_eks_failure.sh    ─dispatch─►    ├─ gh copilot explain <log>
+  Synthetic k8s log                         │  (continue-on-error)
+  category: "eks-deploy"                    │
+                                           Fallback: Python triage_agent.py
+                                             ├─ Fetches log from Gist raw URL
+                                             ├─ Calls GitHub Models (gpt-4o-mini)
+                                             ├─ Tool-calling loop:
+                                             │    check_duplicate_issue
+                                             │    create_github_issue / add_issue_comment
+                                             ├─ Prints RCA to Actions log
+                                             └─ Sends Adaptive Card to Teams
 ```
 
 ---
@@ -81,7 +86,7 @@ npx playwright install chromium
 
 ---
 
-## Step 5 — Run the triage script
+## Step 5a — Run the Playwright triage script
 
 ```bash
 ./run_and_triage.sh
@@ -94,6 +99,25 @@ The script will:
 3. On failure — upload the full log to a secret GitHub Gist
 4. Trigger the GitHub Actions triage workflow
 5. Print the Gist URL and Actions link
+
+---
+
+## Step 5b — Simulate an EKS deploy failure
+
+```bash
+./simulate_eks_failure.sh
+```
+
+Or pick a specific scenario:
+
+```bash
+./simulate_eks_failure.sh CrashLoopBackOff
+./simulate_eks_failure.sh OOMKilled
+./simulate_eks_failure.sh ImagePullBackOff
+./simulate_eks_failure.sh ReadinessProbeFailed
+```
+
+This generates a realistic `kubectl` failure log, uploads it to a secret Gist, and dispatches a `pipeline-failure` event with `category: "eks-deploy"`. The Actions workflow runs the same triage agent and creates a labeled GitHub Issue.
 
 ---
 
@@ -124,21 +148,31 @@ Go to **Settings → Secrets and variables → Actions → New repository secret
 
 ```
 ├── src/
-│   ├── index.html          # Home page
-│   ├── login.html          # Login page
-│   └── dashboard.html      # Dashboard page
+│   ├── index.html           # Home page
+│   ├── login.html           # Login page
+│   └── dashboard.html       # Dashboard page
 ├── tests/
-│   ├── home.spec.js        # Playwright tests (intentionally failing for demo)
+│   ├── home.spec.js         # Playwright tests (intentionally failing for demo)
 │   ├── login.spec.js
-│   └── dashboard.spec.js
+│   ├── dashboard.spec.js
+│   ├── test_agent_tools.py  # Unit tests for GitHub Issue helpers
+│   ├── test_triage_agent.py # Unit tests for tool-calling loop and prompt builder
+│   └── test_gen_eks_log.py  # Unit tests for EKS log generator
+├── scripts/
+│   └── gen_eks_log.py       # Synthetic EKS failure log generator (4 scenarios)
+├── prompts/
+│   └── agent_prompt.md      # Shared agent prompt template with category branching
 ├── .github/
 │   └── workflows/
-│       └── triage.yml      # GitHub Actions workflow
-├── triage_agent.py         # AI triage agent (runs in Actions)
-├── run_and_triage.sh       # Local runner script
+│       └── triage.yml       # GitHub Actions workflow
+├── triage_agent.py          # AI triage agent with tool-calling (runs in Actions)
+├── agent_tools.py           # GitHub Issue create / dedup / comment helpers
+├── run_and_triage.sh        # Playwright failure dispatcher
+├── simulate_eks_failure.sh  # EKS failure dispatcher
+├── requirements.txt         # Pinned Python dependencies
 ├── playwright.config.js
 ├── package.json
-├── .env.example            # Template for your .env
+├── .env.example             # Template for your .env
 └── .gitignore
 ```
 
