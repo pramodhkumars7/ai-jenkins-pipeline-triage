@@ -16,20 +16,30 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v4
 
-      # ── STEP 1: Just print the payload — verify logs are arriving ──────────
+      # ── STEP 1: Print payload — verify logs are arriving ───────────────────
       - name: Print received payload
+        env:
+          EVENT_PAYLOAD: ${{ toJson(github.event.client_payload) }}
         run: |
-          echo "==============================="
-          echo " Payload received from local machine"
-          echo "==============================="
-          echo "Job     : ${{ github.event.client_payload.job }}"
-          echo "Machine : ${{ github.event.client_payload.machine }}"
-          echo "Branch  : ${{ github.event.client_payload.branch }}"
-          echo "Commit  : ${{ github.event.client_payload.commit }}"
-          echo ""
-          echo "--- LOG SNIPPET ---"
-          echo '${{ github.event.client_payload.log }}' | head -50
-          echo "==============================="
+          python3 - <<'EOF'
+          import os, json
+
+          p = json.loads(os.environ["EVENT_PAYLOAD"])
+
+          print("=" * 60)
+          print("  Payload received from local machine")
+          print("=" * 60)
+          print(f"  Job     : {p.get('job', 'N/A')}")
+          print(f"  Machine : {p.get('machine', 'N/A')}")
+          print(f"  Branch  : {p.get('branch', 'N/A')}")
+          print(f"  Commit  : {p.get('commit', 'N/A')}")
+          print()
+          print("--- LOG SNIPPET (first 50 lines) ---")
+          log = p.get("log", "(empty)")
+          for line in log.splitlines()[:50]:
+              print(line)
+          print("=" * 60)
+          EOF
 
       # ── STEP 2: Run triage agent (uncomment when ready) ───────────────────
       # - name: Set up Python

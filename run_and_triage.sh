@@ -2,34 +2,47 @@
 # Runs Playwright tests locally. On failure, ships logs to GitHub Actions via repository_dispatch.
 # Usage: ./run_and_triage.sh
 
-set -euo pipefail
+# Resolve absolute path of the project root (where this script lives)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LOG_DIR="$SCRIPT_DIR/test-results"
+LOG_FILE="$LOG_DIR/run.log"
 
 # ── Load .env if present ──────────────────────────────────────────────────────
-if [ -f .env ]; then
-  export $(grep -v '^#' .env | xargs)
+if [ -f "$SCRIPT_DIR/.env" ]; then
+  export $(grep -v '^#' "$SCRIPT_DIR/.env" | xargs)
 fi
 
 : "${GITHUB_TOKEN:?GITHUB_TOKEN is not set. Add it to .env or export it.}"
-: "${GITHUB_REPO:?GITHUB_REPO is not set. Example: myorg/myrepo}"
+: "${GITHUB_REPO:?GITHUB_REPO is not set. Example: owner/repo}"
 
-LOG_FILE="test-results/run.log"
-mkdir -p test-results
+mkdir -p "$LOG_DIR"
+> "$LOG_FILE"   # create/clear the log file upfront
 
-echo "Running Playwright tests..."
+echo ""
+echo "[1/4] Running Playwright tests..."
+echo "---------------------------------------"
+
+# Run tests — pipe to tee using absolute path, capture exit code via PIPESTATUS
+set +e
 npx playwright test 2>&1 | tee "$LOG_FILE"
 TEST_EXIT=${PIPESTATUS[0]}
+set -e
+
+echo "---------------------------------------"
 
 if [ "$TEST_EXIT" -eq 0 ]; then
-  echo "All tests passed."
+  echo "[OK] All tests passed. Nothing to triage."
   exit 0
 fi
 
-echo "Tests failed. Sending logs to GitHub Actions..."
+echo "[2/4] Tests failed (exit code: $TEST_EXIT). Capturing logs..."
+LINE_COUNT=$(wc -l < "$LOG_FILE" | tr -d ' ')
+echo "      Log captured: $LINE_COUNT lines → $LOG_FILE"
 
-# Grab last 150 lines and JSON-encode them safely
+echo "[3/4] Encoding log and sending to GitHub Actions..."
 LOG_SNIPPET=$(tail -150 "$LOG_FILE" | python3 -c "import sys,json; print(json.dumps(sys.stdin.read()))")
 
-HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
+RESPONSE=$(curl -s -w "\nHTTP_STATUS:%{http_code}" -X POST \
   -H "Authorization: token ${GITHUB_TOKEN}" \
   -H "Accept: application/vnd.github.v3+json" \
   "https://api.github.com/repos/${GITHUB_REPO}/dispatches" \
@@ -38,16 +51,24 @@ HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" -X POST \
     \"client_payload\": {
       \"job\": \"local-playwright-e2e\",
       \"machine\": \"$(hostname)\",
-      \"branch\": \"$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)\",
-      \"commit\": \"$(git rev-parse --short HEAD 2>/dev/null || echo unknown)\",
+      \"branch\": \"$(git -C "$SCRIPT_DIR" rev-parse --abbrev-ref HEAD 2>/dev/null || echo unknown)\",
+      \"commit\": \"$(git -C "$SCRIPT_DIR" rev-parse --short HEAD 2>/dev/null || echo unknown)\",
       \"log\": $LOG_SNIPPET
     }
   }")
 
+HTTP_STATUS=$(echo "$RESPONSE" | grep "HTTP_STATUS:" | cut -d: -f2)
+BODY=$(echo "$RESPONSE" | grep -v "HTTP_STATUS:")
+
+echo "[4/4] curl response: HTTP $HTTP_STATUS"
+
 if [ "$HTTP_STATUS" -eq 204 ]; then
-  echo "Triage triggered successfully on GitHub Actions (HTTP $HTTP_STATUS)."
+  echo "      Dispatch sent successfully."
+  echo "      Watch the triage run at: https://github.com/${GITHUB_REPO}/actions"
 else
-  echo "Warning: GitHub dispatch returned HTTP $HTTP_STATUS. Check your GITHUB_TOKEN and GITHUB_REPO."
+  echo "      ERROR: Dispatch failed."
+  echo "      Body: $BODY"
+  echo "      Check: GITHUB_TOKEN has 'repo' scope and GITHUB_REPO=owner/repo is correct."
 fi
 
 exit "$TEST_EXIT"
