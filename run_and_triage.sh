@@ -39,6 +39,17 @@ fi
 LINE_COUNT=$(wc -l < "$LOG_FILE" | tr -d ' ')
 echo "[2/4] Tests failed ($LINE_COUNT lines). Uploading full log to GitHub Gist..."
 
+# Verify token has gist scope before attempting upload
+TOKEN_SCOPES=$(curl -s -I \
+  -H "Authorization: token ${GITHUB_TOKEN}" \
+  https://api.github.com/user | grep -i "x-oauth-scopes" | tr -d '\r')
+echo "      Token scopes: ${TOKEN_SCOPES:-none detected}"
+if ! echo "$TOKEN_SCOPES" | grep -qi "gist"; then
+  echo "      ERROR: GITHUB_TOKEN is missing 'gist' scope."
+  echo "      Go to github.com/settings/tokens → edit token → tick 'gist' → regenerate → update .env"
+  exit 1
+fi
+
 # Upload the entire log file to a secret Gist — no size limit
 LOG_CONTENT=$(python3 -c "import sys,json; print(json.dumps(open('$LOG_FILE').read()))")
 TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
