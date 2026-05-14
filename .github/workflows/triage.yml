@@ -25,15 +25,18 @@ jobs:
           python-version: '3.12'
 
       - name: Install dependencies
-        run: pip install openai
+        run: pip install openai requests
 
       # ── Step 3: Run triage agent ───────────────────────────────────────────
       # GITHUB_TOKEN  → GitHub Models (auto-injected, no setup needed)
-      # PAT_TOKEN     → Gist fetch + delete  (add in repo Settings → Secrets)
+      # PAT_TOKEN     → Gist fetch + delete  (repo Settings → Secrets)
+      # TEAMS_WEBHOOK → Teams incoming webhook URL (repo Settings → Secrets)
       # EVENT_PAYLOAD → metadata + gist_id sent from local machine
       - name: Run triage agent
         env:
           GITHUB_TOKEN:  ${{ secrets.GITHUB_TOKEN }}
           PAT_TOKEN:     ${{ secrets.PAT_TOKEN }}
+          TEAMS_WEBHOOK: ${{ secrets.TEAMS_WEBHOOK }}
           EVENT_PAYLOAD: ${{ toJson(github.event.client_payload) }}
+          ACTIONS_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: python triage_agent.py

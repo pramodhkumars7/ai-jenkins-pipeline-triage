@@ -9,6 +9,7 @@ Pipeline Triage Agent
 import os
 import json
 import urllib.request
+import requests
 from openai import OpenAI
 
 
@@ -122,6 +123,64 @@ High / Medium / Low — and one sentence why.
     # ── 5. Print RCA to console ───────────────────────────────────────────────
     section("RCA & Recommended Fix")
     print(rca)
+
+    # ── 6. Notify Teams ───────────────────────────────────────────────────────
+    section("Sending notification to Teams")
+    teams_webhook = os.environ.get("TEAMS_WEBHOOK", "")
+    actions_url   = os.environ.get("ACTIONS_RUN_URL", "")
+
+    if not teams_webhook:
+        print("  TEAMS_WEBHOOK not set — skipping Teams notification.")
+    else:
+        # Adaptive Card — works with Teams Workflows webhook
+        view_action = f"\n\n[View Actions Run]({actions_url})" if actions_url else ""
+        card = {
+            "type": "message",
+            "attachments": [
+                {
+                    "contentType": "application/vnd.microsoft.card.adaptive",
+                    "content": {
+                        "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+                        "type": "AdaptiveCard",
+                        "version": "1.4",
+                        "body": [
+                            {
+                                "type": "TextBlock",
+                                "text": f"🔴 Pipeline Failure — {job}",
+                                "weight": "Bolder",
+                                "size": "Medium",
+                                "color": "Attention"
+                            },
+                            {
+                                "type": "FactSet",
+                                "facts": [
+                                    {"title": "Job",    "value": job},
+                                    {"title": "Branch", "value": branch}
+                                ]
+                            },
+                            {
+                                "type": "TextBlock",
+                                "text": "RCA & Recommended Fix",
+                                "weight": "Bolder",
+                                "separator": True
+                            },
+                            {
+                                "type": "TextBlock",
+                                "text": rca + view_action,
+                                "wrap": True
+                            }
+                        ]
+                    }
+                }
+            ]
+        }
+
+        resp = requests.post(teams_webhook, json=card, timeout=10)
+        if resp.status_code in (200, 202):
+            print("  Teams notified successfully.")
+        else:
+            print(f"  Teams notification failed: HTTP {resp.status_code} — {resp.text}")
+
     section("Triage complete")
 
 
