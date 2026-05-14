@@ -19,15 +19,16 @@ jobs:
       # ── STEP 1: Fetch full log from Gist and print it ─────────────────────
       - name: Print received payload and full log
         env:
-          GITHUB_TOKEN:  ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN:  ${{ secrets.GITHUB_TOKEN }}   # for GitHub Models
+          PAT_TOKEN:     ${{ secrets.PAT_TOKEN }}       # for Gist fetch/delete (needs gist scope)
           EVENT_PAYLOAD: ${{ toJson(github.event.client_payload) }}
         run: |
           python3 - <<'EOF'
           import os, json, urllib.request
 
-          p       = json.loads(os.environ["EVENT_PAYLOAD"])
-          token   = os.environ["GITHUB_TOKEN"]
-          gist_id = p.get("gist_id", "")
+          p         = json.loads(os.environ["EVENT_PAYLOAD"])
+          pat_token = os.environ["PAT_TOKEN"]     # PAT with gist scope — fetches/deletes Gist
+          gist_id   = p.get("gist_id", "")
 
           print("=" * 60)
           print("  Payload received from local machine")
@@ -42,12 +43,15 @@ jobs:
           if not gist_id:
               print("No gist_id in payload.")
           else:
+              gist_headers = {
+                  "Authorization": f"token {pat_token}",
+                  "Accept": "application/vnd.github.v3+json"
+              }
+
+              # Fetch full log from Gist using PAT
               req = urllib.request.Request(
                   f"https://api.github.com/gists/{gist_id}",
-                  headers={
-                      "Authorization": f"token {token}",
-                      "Accept": "application/vnd.github.v3+json"
-                  }
+                  headers=gist_headers
               )
               with urllib.request.urlopen(req) as resp:
                   gist_data = json.loads(resp.read())
@@ -61,10 +65,7 @@ jobs:
               # Delete Gist immediately after reading
               del_req = urllib.request.Request(
                   f"https://api.github.com/gists/{gist_id}",
-                  headers={
-                      "Authorization": f"token {token}",
-                      "Accept": "application/vnd.github.v3+json"
-                  },
+                  headers=gist_headers,
                   method="DELETE"
               )
               urllib.request.urlopen(del_req)
@@ -83,6 +84,7 @@ jobs:
       # - name: Run triage agent
       #   env:
       #     GITHUB_TOKEN:  ${{ secrets.GITHUB_TOKEN }}
+      #     PAT_TOKEN:     ${{ secrets.PAT_TOKEN }}
       #     TEAMS_WEBHOOK: ${{ secrets.TEAMS_WEBHOOK }}
       #     EVENT_PAYLOAD: ${{ toJson(github.event.client_payload) }}
       #   run: python triage_agent.py

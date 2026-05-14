@@ -36,9 +36,9 @@ def fetch_log_from_gist(gist_id: str, token: str) -> str:
     return content
 
 def main():
-    payload  = json.loads(os.environ["EVENT_PAYLOAD"])
-    token    = os.environ["GITHUB_TOKEN"]
-    gist_id  = payload.get("gist_id", "")
+    payload   = json.loads(os.environ["EVENT_PAYLOAD"])
+    pat_token = os.environ["PAT_TOKEN"]   # PAT with gist scope
+    gist_id   = payload.get("gist_id", "")
     job      = payload.get("job", "unknown-job")
     machine  = payload.get("machine", "unknown")
     branch   = payload.get("branch", "unknown")
@@ -49,7 +49,7 @@ def main():
         return
 
     print(f"Fetching full log from Gist {gist_id}...")
-    log = fetch_log_from_gist(gist_id, token)
+    log = fetch_log_from_gist(gist_id, pat_token)
     print(f"Log fetched: {len(log.splitlines())} lines")
 
     prompt = f"""You are a senior QA/DevOps engineer. A Playwright E2E test suite just failed.
