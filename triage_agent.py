@@ -140,32 +140,32 @@ def apply_playwright_fix() -> tuple:
 def create_draft_pr(branch: str, commit_msg: str, files: list,
                     rca: str, error_class: str, token: str) -> str:
     repo = os.environ.get("GITHUB_REPOSITORY", "")
-    # If branch already exists remotely, return existing PR URL without re-committing
+    remote_url = f"https://x-access-token:{token}@github.com/{repo}.git"
+    gh_env = {**os.environ, "GITHUB_TOKEN": token}
+    # If branch already exists remotely, skip commit/push
     remote_check = subprocess.run(
-        ["git", "ls-remote", "--heads", f"https://x-access-token:{token}@github.com/{repo}.git", branch],
+        ["git", "ls-remote", "--heads", remote_url, branch],
         capture_output=True, text=True,
     )
-    if remote_check.stdout.strip():
-        existing = subprocess.run(
-            ["gh", "pr", "view", branch, "--json", "url", "-q", ".url"],
-            capture_output=True, text=True, env={**os.environ, "GITHUB_TOKEN": token},
-        )
-        if existing.returncode == 0 and existing.stdout.strip():
-            print(f"  Fix branch already exists — returning existing PR")
-            return existing.stdout.strip()
-    subprocess.run(["git", "config", "user.email", "triage-agent@github-actions"], check=True)
-    subprocess.run(["git", "config", "user.name", "Pipeline Triage Agent"], check=True)
-    # Save fix before checkout (git checkout -b doesn't reset working dir for new branches)
-    saved = {f: pathlib.Path(f).read_text() for f in files}
-    subprocess.run(["git", "checkout", "-b", branch], check=True)
-    for path, content in saved.items():
-        pathlib.Path(path).write_text(content)
-    subprocess.run(["git", "add"] + files, check=True)
-    subprocess.run(["git", "commit", "-m", commit_msg], check=True)
-    subprocess.run(
-        ["git", "push", f"https://x-access-token:{token}@github.com/{repo}.git", branch],
-        check=True,
+    branch_exists = bool(remote_check.stdout.strip())
+    if not branch_exists:
+        subprocess.run(["git", "config", "user.email", "triage-agent@github-actions"], check=True)
+        subprocess.run(["git", "config", "user.name", "Pipeline Triage Agent"], check=True)
+        saved = {f: pathlib.Path(f).read_text() for f in files}
+        subprocess.run(["git", "checkout", "-b", branch], check=True)
+        for path, content in saved.items():
+            pathlib.Path(path).write_text(content)
+        subprocess.run(["git", "add"] + files, check=True)
+        subprocess.run(["git", "commit", "-m", commit_msg], check=True)
+        subprocess.run(["git", "push", remote_url, branch], check=True)
+    # Return existing PR URL if one exists, otherwise create it
+    existing = subprocess.run(
+        ["gh", "pr", "view", branch, "--json", "url", "-q", ".url"],
+        capture_output=True, text=True, env=gh_env,
     )
+    if existing.returncode == 0 and existing.stdout.strip():
+        print(f"  Returning existing PR for branch {branch}")
+        return existing.stdout.strip()
     pr_body = (
         f"## Auto-fix: {error_class}\n\n"
         f"### Root Cause Analysis\n{rca}\n\n"
@@ -180,8 +180,7 @@ def create_draft_pr(branch: str, commit_msg: str, files: list,
          "--draft",
          "--base", "main",
          "--head", branch],
-        capture_output=True, text=True,
-        env={**os.environ, "GITHUB_TOKEN": token},
+        capture_output=True, text=True, env=gh_env,
     )
     if result.returncode != 0:
         print(f"  PR creation failed: {result.stderr}")
