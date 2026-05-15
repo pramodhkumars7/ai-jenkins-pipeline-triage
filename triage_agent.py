@@ -1,19 +1,17 @@
 """
 Pipeline Triage Agent
-  1. Reads dispatch payload (job metadata + gist_raw_url + category)
-  2. Fetches full log from the raw Gist URL — no auth needed
-  3. Calls GitHub Models (gpt-4o) with tool-calling (check_duplicate_issue,
-     add_issue_comment, create_github_issue)
-  4. Prints RCA to console
+  1. Reads dispatch payload (job metadata + log + category)
+  2. Gets RCA from gh copilot explain (Claude Sonnet 4.6)
+  3. Applies fix to k8s/playwright files and opens a draft PR
+  4. Creates/updates GitHub Issue (dedup by signature)
   5. Sends Adaptive Card to Teams
 """
 import os
 import sys
 import json
+import subprocess
 import pathlib
-import urllib.request
 import requests
-from openai import OpenAI
 import agent_tools
 
 
@@ -23,193 +21,221 @@ def section(title: str):
     print('=' * 60)
 
 
-def fetch_log(raw_url: str) -> str:
-    with urllib.request.urlopen(raw_url, timeout=30) as resp:
-        return resp.read().decode("utf-8")
-
-
-# ── Tool definitions ──────────────────────────────────────────────────────────
-
-TOOLS = [
-    {
-        "type": "function",
-        "function": {
-            "name": "check_duplicate_issue",
-            "description": "Check whether an open GitHub Issue with this failure signature already exists.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "signature": {
-                        "type": "string",
-                        "description": "Failure signature e.g. '[playwright-e2e] TimeoutError'",
-                    }
-                },
-                "required": ["signature"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "add_issue_comment",
-            "description": "Add a comment to an existing GitHub Issue.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "issue_number": {"type": "integer"},
-                    "body": {"type": "string"},
-                },
-                "required": ["issue_number", "body"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "create_github_issue",
-            "description": "Create a new GitHub Issue for this failure.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "title":  {"type": "string"},
-                    "body":   {"type": "string"},
-                    "labels": {"type": "array", "items": {"type": "string"}},
-                },
-                "required": ["title", "body", "labels"],
-            },
-        },
-    },
-]
-
-
-def dispatch_tool(name: str, args: dict, token: str) -> str:
-    if name == "check_duplicate_issue":
-        result = agent_tools.check_duplicate_issue(args["signature"], token)
-    elif name == "add_issue_comment":
-        result = agent_tools.add_issue_comment(args["issue_number"], args["body"], token)
-    elif name == "create_github_issue":
-        result = agent_tools.create_github_issue(
-            args["title"], args["body"], args["labels"], token
-        )
-    else:
-        result = {"error": f"Unknown tool: {name}"}
-    print(f"  Tool '{name}' → {result}")
-    return json.dumps(result)
-
-
-def run_agent_loop(client, messages: list, token: str, max_iterations: int = 10) -> str:
-    for _ in range(max_iterations):
-        resp = client.chat.completions.create(
-            model="gpt-4o",
-            messages=messages,
-            tools=TOOLS,
-            tool_choice="auto",
-            max_tokens=2000,
-        )
-        msg = resp.choices[0].message
-        if not msg.tool_calls:
-            return msg.content
-        messages.append(msg)
-        for tc in msg.tool_calls:
-            result = dispatch_tool(
-                tc.function.name, json.loads(tc.function.arguments), token
-            )
-            messages.append(
-                {"role": "tool", "tool_call_id": tc.id, "content": result}
-            )
-    return "Agent reached maximum iterations without producing a final response."
-
-
-# ── Prompt builder ────────────────────────────────────────────────────────────
-
 CATEGORY_INSTRUCTIONS = {
     "playwright-e2e": (
         "Focus on: selector mismatches, assertion errors, timing/flakiness, "
         "broken page structure, baseURL/fixture issues. "
-        "When identifying failing tests, include the spec file name and test description. "
-        "Suggest exact code changes (e.g. which selector to fix, which timeout to increase)."
+        "Identify the failing spec file and test description. "
+        "Suggest the exact selector or timeout fix."
     ),
     "eks-deploy": (
-        "Focus on: pod status (CrashLoopBackOff / OOMKilled / ImagePullBackOff / ReadinessProbeFailed), "
-        "resource limits (memory/CPU), image registry authentication, readiness/liveness probe config. "
-        "Suggest concrete `kubectl` commands the on-call engineer can run immediately to verify and fix."
+        "Focus on: pod status (CrashLoopBackOff/OOMKilled/ImagePullBackOff/ReadinessProbeFailed), "
+        "resource limits, image registry authentication, readiness/liveness probe config. "
+        "Suggest concrete kubectl commands to verify and fix immediately."
     ),
 }
 
-_PROMPT_TEMPLATE = pathlib.Path(__file__).parent.joinpath("prompts", "agent_prompt.md").read_text()
 
+# ── RCA via GitHub Copilot (Claude Sonnet 4.6) ────────────────────────────────
 
-def build_prompt(*, job: str, branch: str, commit: str, category: str,
-                 gist_raw_url: str, actions_run_url: str, log: str) -> str:
+def get_rca(log: str, category: str) -> str:
     instructions = CATEGORY_INSTRUCTIONS.get(
         category,
-        f"Analyze the log for category '{category}' and provide root cause, fix, and confidence.",
+        f"Analyze this '{category}' failure and identify root cause and fix.",
     )
+    prompt = (
+        f"You are a CI/CD triage expert. {instructions}\n\n"
+        f"Analyze the following failure log and provide:\n"
+        f"1. Root cause (what went wrong and why)\n"
+        f"2. Recommended fix with specific steps\n"
+        f"3. Confidence level (High/Medium/Low)\n\n"
+        f"Failure log:\n{log}"
+    )
+    result = subprocess.run(
+        ["gh", "copilot", "explain", prompt],
+        capture_output=True, text=True, timeout=120,
+        env={**os.environ, "GH_PROMPT_DISABLED": "1"},
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"gh copilot explain failed:\n{result.stderr}")
+    return result.stdout.strip()
+
+
+def detect_error_class(log: str, rca: str) -> str:
+    combined = (log + " " + rca).lower()
+    for cls in ["OOMKilled", "CrashLoopBackOff", "ImagePullBackOff",
+                "ReadinessProbeFailed", "TimeoutError", "AssertionError"]:
+        if cls.lower() in combined:
+            return cls
+    return "Unknown"
+
+
+# ── EKS auto-fix ──────────────────────────────────────────────────────────────
+
+_EKS_FIXES = {
+    "OOMKilled": {
+        "replacements": [('memory: "256Mi"', 'memory: "512Mi"')],
+        "branch": "fix/eks-oomkilled-increase-memory",
+        "msg": "fix: increase memory limit to 512Mi to prevent OOMKilled",
+    },
+    "ImagePullBackOff": {
+        "replacements": [("image: myapp:v2.3.1", "image: myapp:v2.3.2")],
+        "branch": "fix/eks-imagepull-update-tag",
+        "msg": "fix: update image tag to resolve ImagePullBackOff",
+    },
+    "ReadinessProbeFailed": {
+        "replacements": [
+            ("failureThreshold: 3", "failureThreshold: 6"),
+            ("initialDelaySeconds: 10", "initialDelaySeconds: 30"),
+        ],
+        "branch": "fix/eks-readiness-probe-thresholds",
+        "msg": "fix: increase readiness probe thresholds to resolve ReadinessProbeFailed",
+    },
+    "CrashLoopBackOff": {
+        "replacements": [(
+            "env: []",
+            "env:\n        - name: DATABASE_URL\n          value: postgresql://db-service:5432/appdb",
+        )],
+        "branch": "fix/eks-crashloop-db-env",
+        "msg": "fix: add DATABASE_URL env var to resolve startup failure",
+    },
+}
+
+
+def apply_eks_fix(error_class: str) -> tuple:
+    fix = _EKS_FIXES.get(error_class)
+    if not fix:
+        return None, None, []
+    manifest = pathlib.Path("k8s/deployment.yaml")
+    content = manifest.read_text()
+    for old, new in fix["replacements"]:
+        content = content.replace(old, new)
+    manifest.write_text(content)
+    return fix["branch"], fix["msg"], ["k8s/deployment.yaml"]
+
+
+# ── Playwright auto-fix ───────────────────────────────────────────────────────
+
+def apply_playwright_fix() -> tuple:
+    config = pathlib.Path("playwright.config.js")
+    content = config.read_text()
+    new_content = content.replace("timeout: 30000", "timeout: 60000")
+    if new_content == content:
+        return None, None, []
+    config.write_text(new_content)
     return (
-        _PROMPT_TEMPLATE
-        .replace("{{job}}", job)
-        .replace("{{branch}}", branch)
-        .replace("{{commit}}", commit)
-        .replace("{{category}}", category)
-        .replace("{{gist_raw_url}}", gist_raw_url)
-        .replace("{{actions_run_url}}", actions_run_url)
-        .replace("{{category_instructions}}", instructions)
-        .replace("{{log}}", log)
+        "fix/playwright-increase-timeout",
+        "fix: increase Playwright default timeout to 60s",
+        ["playwright.config.js"],
     )
+
+
+# ── Draft PR ──────────────────────────────────────────────────────────────────
+
+def create_draft_pr(branch: str, commit_msg: str, files: list,
+                    rca: str, error_class: str, token: str) -> str:
+    repo = os.environ.get("GITHUB_REPOSITORY", "")
+    subprocess.run(["git", "config", "user.email", "triage-agent@github-actions"], check=True)
+    subprocess.run(["git", "config", "user.name", "Pipeline Triage Agent"], check=True)
+    subprocess.run(["git", "checkout", "-b", branch], check=True)
+    subprocess.run(["git", "add"] + files, check=True)
+    subprocess.run(["git", "commit", "-m", commit_msg], check=True)
+    subprocess.run(
+        ["git", "push", f"https://x-access-token:{token}@github.com/{repo}.git", branch],
+        check=True,
+    )
+    pr_body = (
+        f"## Auto-fix: {error_class}\n\n"
+        f"### Root Cause Analysis\n{rca}\n\n"
+        f"### Files changed\n"
+        + "\n".join(f"- `{f}`" for f in files)
+        + "\n\n> Auto-generated by Pipeline Triage Agent — review before merging."
+    )
+    result = subprocess.run(
+        ["gh", "pr", "create",
+         "--title", f"[auto-fix] {commit_msg}",
+         "--body", pr_body,
+         "--draft",
+         "--base", "main",
+         "--head", branch],
+        capture_output=True, text=True,
+        env={**os.environ, "GITHUB_TOKEN": token},
+    )
+    if result.returncode != 0:
+        print(f"  PR creation failed: {result.stderr}")
+        return ""
+    return result.stdout.strip()
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
-    payload      = json.loads(os.environ["EVENT_PAYLOAD"])
-    gh_token     = os.environ["GITHUB_TOKEN"]
+    payload   = json.loads(os.environ["EVENT_PAYLOAD"])
+    gh_token  = os.environ["GITHUB_TOKEN"]
 
-    gist_raw_url = payload.get("gist_raw_url", "")
-    job          = payload.get("job",      "unknown-job")
-    branch       = payload.get("branch",   "unknown")
-    commit       = payload.get("commit",   "unknown")
-    category     = payload.get("category", "playwright-e2e")
+    log_raw  = payload.get("log", "")
+    log      = json.dumps(log_raw, indent=2) if isinstance(log_raw, dict) else str(log_raw)
+    job      = payload.get("job",      "unknown-job")
+    branch   = payload.get("branch",   "unknown")
+    commit   = payload.get("commit",   "unknown")
+    category = payload.get("category", "eks-deploy")
 
     section("Payload received")
     print(f"  Job      : {job}")
     print(f"  Branch   : {branch}")
     print(f"  Commit   : {commit}")
     print(f"  Category : {category}")
+    print(f"  Log size : {len(log)} chars")
 
-    if not gist_raw_url:
-        print("\nERROR: No gist_raw_url in payload — cannot fetch log.")
+    if not log.strip():
+        print("\nERROR: No log in payload.")
         sys.exit(1)
 
-    section("Fetching log from Gist")
-    log = fetch_log(gist_raw_url)
-    line_count = len(log.splitlines())
-    print(f"  Log fetched: {line_count} lines")
-
-    section(f"Full failure log ({line_count} lines)")
-    print(log)
-
-    section("Running triage agent (GitHub Models + tool-calling)")
-
-    client = OpenAI(
-        base_url="https://models.inference.ai.azure.com",
-        api_key=gh_token,
-    )
-
-    actions_run_url = os.environ.get("ACTIONS_RUN_URL", "")
-    prompt = build_prompt(
-        job=job,
-        branch=branch,
-        commit=commit,
-        category=category,
-        gist_raw_url=gist_raw_url,
-        actions_run_url=actions_run_url,
-        log=log,
-    )
-
-    rca = run_agent_loop(client, [{"role": "user", "content": prompt}], gh_token)
-
-    section("RCA & Recommended Fix")
+    section("Getting RCA from GitHub Copilot (Claude Sonnet 4.6)")
+    rca = get_rca(log, category)
     print(rca)
+
+    error_class = detect_error_class(log, rca)
+    print(f"\n  Detected error class: {error_class}")
+
+    section("Applying auto-fix and creating draft PR")
+    actions_run_url = os.environ.get("ACTIONS_RUN_URL", "")
+    pr_url = ""
+    try:
+        if category == "eks-deploy":
+            fix_branch, commit_msg, files = apply_eks_fix(error_class)
+        else:
+            fix_branch, commit_msg, files = apply_playwright_fix()
+
+        if fix_branch:
+            pr_url = create_draft_pr(fix_branch, commit_msg, files, rca, error_class, gh_token)
+            print(f"  Draft PR: {pr_url}")
+        else:
+            print(f"  No auto-fix available for: {error_class}")
+    except Exception as e:
+        print(f"  Auto-fix failed (non-fatal): {e}")
+
+    section("Creating/updating GitHub Issue")
+    signature    = f"[{category}] {error_class}"
+    comment_body = (
+        f"**RCA**\n{rca}"
+        + (f"\n\n**Auto-fix PR:** {pr_url}" if pr_url else "")
+        + (f"\n\n**Actions run:** {actions_run_url}" if actions_run_url else "")
+    )
+    dup = agent_tools.check_duplicate_issue(signature, gh_token)
+    if dup["duplicate"]:
+        agent_tools.add_issue_comment(dup["issue_number"], comment_body, gh_token)
+        print(f"  Commented on existing issue #{dup['issue_number']}: {dup['url']}")
+    else:
+        issue_body = (
+            f"## Root Cause Analysis\n{rca}\n\n"
+            + (f"## Auto-fix PR\n{pr_url}\n\n" if pr_url else "")
+            + f"**Log excerpt:**\n```\n{log[:3000]}\n```"
+        )
+        result = agent_tools.create_github_issue(
+            signature, issue_body, ["pipeline-triage", category], gh_token
+        )
+        print(f"  Issue created: {result['url']}")
 
     section("Sending notification to Teams")
     teams_webhook = os.environ.get("TEAMS_WEBHOOK", "")
@@ -218,47 +244,47 @@ def main():
     else:
         card = {
             "type": "message",
-            "attachments": [
-                {
-                    "contentType": "application/vnd.microsoft.card.adaptive",
-                    "content": {
-                        "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
-                        "type": "AdaptiveCard",
-                        "version": "1.4",
-                        "body": [
-                            {
-                                "type": "TextBlock",
-                                "text": f"Pipeline Failure — {job}",
-                                "weight": "Bolder",
-                                "size": "Medium",
-                                "color": "Attention",
-                            },
-                            {
-                                "type": "FactSet",
-                                "facts": [
-                                    {"title": "Job",      "value": job},
-                                    {"title": "Branch",   "value": branch},
-                                    {"title": "Category", "value": category},
-                                ],
-                            },
-                            {
-                                "type": "TextBlock",
-                                "text": "RCA & Recommended Fix",
-                                "weight": "Bolder",
-                                "separator": True,
-                            },
-                            {
-                                "type": "TextBlock",
-                                "text": rca + (
-                                    f"\n\n[View Actions Run]({actions_run_url})"
-                                    if actions_run_url else ""
-                                ),
-                                "wrap": True,
-                            },
-                        ],
-                    },
-                }
-            ],
+            "attachments": [{
+                "contentType": "application/vnd.microsoft.card.adaptive",
+                "content": {
+                    "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+                    "type": "AdaptiveCard",
+                    "version": "1.4",
+                    "body": [
+                        {
+                            "type": "TextBlock",
+                            "text": f"Pipeline Failure — {job}",
+                            "weight": "Bolder",
+                            "size": "Medium",
+                            "color": "Attention",
+                        },
+                        {
+                            "type": "FactSet",
+                            "facts": [
+                                {"title": "Job",      "value": job},
+                                {"title": "Branch",   "value": branch},
+                                {"title": "Category", "value": category},
+                                {"title": "Error",    "value": error_class},
+                            ],
+                        },
+                        {
+                            "type": "TextBlock",
+                            "text": "RCA & Recommended Fix",
+                            "weight": "Bolder",
+                            "separator": True,
+                        },
+                        {
+                            "type": "TextBlock",
+                            "text": (
+                                rca
+                                + (f"\n\n[View Actions Run]({actions_run_url})" if actions_run_url else "")
+                                + (f"\n\n[Auto-fix PR]({pr_url})" if pr_url else "")
+                            ),
+                            "wrap": True,
+                        },
+                    ],
+                },
+            }],
         }
         resp = requests.post(teams_webhook, json=card, timeout=10)
         if resp.status_code in (200, 202):
