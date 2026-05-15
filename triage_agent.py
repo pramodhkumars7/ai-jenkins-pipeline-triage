@@ -280,13 +280,21 @@ def main():
                         },
                         {
                             "type": "TextBlock",
-                            "text": (
-                                rca
-                                + (f"\n\n[View Actions Run]({actions_run_url})" if actions_run_url else "")
-                                + (f"\n\n[Auto-fix PR]({pr_url})" if pr_url else "")
-                            ),
+                            "text": rca,
                             "wrap": True,
                         },
+                    ],
+                    "actions": [
+                        *([{
+                            "type": "Action.OpenUrl",
+                            "title": "View Auto-fix PR",
+                            "url": pr_url,
+                        }] if pr_url else []),
+                        *([{
+                            "type": "Action.OpenUrl",
+                            "title": "View Actions Run",
+                            "url": actions_run_url,
+                        }] if actions_run_url else []),
                     ],
                 },
             }],
