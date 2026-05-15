@@ -89,7 +89,7 @@ jobs:
           node-version: '20'
 
       - name: Install dependencies and Playwright
-        run: npm ci && npx playwright install chromium --with-deps
+        run: npm install && npx playwright install chromium --with-deps
 
       - uses: actions/setup-python@v5
         with:
