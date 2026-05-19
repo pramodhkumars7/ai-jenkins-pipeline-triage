@@ -13,7 +13,8 @@ pipeline {
             quickFilterEnabled: true,
             selectedValue: 'DEFAULT',
             sortMode: 'ASCENDING_SMART',
-            useRepository: 'file:///workspace'
+            listSize: '10'
+            // useRepository will auto-detect from SCM configuration
         )
         choice(
             name: 'TEST_CATEGORY',
