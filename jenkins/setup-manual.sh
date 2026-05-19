@@ -63,7 +63,7 @@ if [ $? -ne 0 ]; then
     echo "  2. Disconnect from VPN and try again"
     echo "  3. Check Docker Desktop is running: docker ps"
     echo "  4. Try using Google DNS in Docker Desktop settings"
-    echo "  5. See TROUBLESHOOTING.md for more solutions"
+    echo "  5. See README.md (Troubleshooting section) for more solutions"
     exit 1
 fi
 
@@ -141,8 +141,8 @@ echo "      - Pipeline script from SCM → Git"
 echo "      - Repository URL: file:///workspace"
 echo "      - Script Path: jenkins/Jenkinsfile"
 echo ""
-echo "📖 See detailed guide: jenkins/PIPELINE_CREATION_GUIDE.md"
-echo "🔧 Having issues? See: jenkins/TROUBLESHOOTING.md"
+echo "📖 See complete guide: jenkins/README.md"
+echo "🔧 Having issues? See README.md Troubleshooting section"
 echo ""
 echo "📊 Useful commands:"
 echo "   View logs:    cd jenkins && docker-compose logs -f"

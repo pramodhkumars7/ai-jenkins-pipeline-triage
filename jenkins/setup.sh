@@ -61,7 +61,7 @@ if [ $? -ne 0 ]; then
     echo "  1. Check your internet connection"
     echo "  2. Disconnect from VPN and try again"
     echo "  3. Try again: the download may have timed out"
-    echo "  4. See jenkins/TROUBLESHOOTING.md for more solutions"
+    echo "  4. See jenkins/README.md (Troubleshooting section) for more solutions"
     exit 1
 fi
 

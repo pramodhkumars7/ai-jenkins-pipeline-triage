@@ -47,7 +47,7 @@ Edit `.env`:
 
 ```
 GITHUB_TOKEN=ghp_your_token_here
-GITHUB_REPO=AI-Ideas-xyz/ai-jenkins-pipeline-triage
+GITHUB_REPO=pramodhkumars7/ai-jenkins-pipeline-triage
 ```
 
 > `.env` is gitignored — it will never be committed.

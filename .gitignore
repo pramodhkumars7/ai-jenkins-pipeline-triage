@@ -228,3 +228,14 @@ triage-logs/
 jenkins/jenkins_home/
 jenkins/github-dispatch-payload.json
 jenkins/test-output.log
+jenkins/init-branches.sh
+
+# Generated files and logs
+github-dispatch-payload.json
+logs.md
+test_run_logs.txt
+*_logs.txt
+package-lock.json
+
+# Temporary documentation
+JENKINS_QUICKSTART.md
