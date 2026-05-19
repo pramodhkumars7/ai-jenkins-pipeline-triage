@@ -1,0 +1,38 @@
+version: '3.8'
+
+services:
+  jenkins:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      # Increase build timeout and add network mode
+      args:
+        BUILDKIT_INLINE_CACHE: 1
+    container_name: jenkins-local
+    privileged: true
+    user: root
+    ports:
+      - "8080:8080"   # Jenkins Web UI
+      - "50000:50000" # Jenkins agent port
+    volumes:
+      - jenkins_home:/var/jenkins_home
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ../:/workspace  # Mount the project directory
+    environment:
+      - JAVA_OPTS=-Djenkins.install.runSetupWizard=false -Dhudson.security.csrf.GlobalCrumbIssuerConfiguration.DISABLE_CSRF_PROTECTION=true
+      - DOCKER_HOST=unix:///var/run/docker.sock
+    networks:
+      - jenkins-network
+    restart: unless-stopped
+    # Add DNS for better connectivity
+    dns:
+      - 8.8.8.8
+      - 8.8.4.4
+
+volumes:
+  jenkins_home:
+    driver: local
+
+networks:
+  jenkins-network:
+    driver: bridge

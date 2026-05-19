@@ -1,0 +1,8 @@
+# Jenkins data directory (created by Docker)
+jenkins_home/
+
+# GitHub dispatch payloads (created during pipeline runs)
+github-dispatch-payload.json
+
+# Test outputs
+test-output.log

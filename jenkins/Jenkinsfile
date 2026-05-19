@@ -1,0 +1,155 @@
+pipeline {
+    agent any
+
+    parameters {
+        choice(
+            name: 'TEST_CATEGORY',
+            choices: ['playwright-e2e', 'eks-deploy'],
+            description: 'Category of tests to run'
+        )
+        choice(
+            name: 'EKS_SCENARIO',
+            choices: ['random', 'CrashLoopBackOff', 'OOMKilled', 'ImagePullBackOff', 'ReadinessProbeFailed'],
+            description: 'EKS failure scenario (only used if category is eks-deploy)'
+        )
+    }
+
+    environment {
+        GITHUB_TOKEN = credentials('github-pat-token')
+        WORKSPACE_DIR = '/workspace'
+        GITHUB_REPO = 'AI-Ideas-xyz/ai-jenkins-pipeline-triage'
+    }
+
+    stages {
+        stage('Setup') {
+            steps {
+                script {
+                    echo "Starting pipeline for category: ${params.TEST_CATEGORY}"
+                    sh "cd ${WORKSPACE_DIR} && ls -la"
+                }
+            }
+        }
+
+        stage('Install Dependencies') {
+            when {
+                expression { params.TEST_CATEGORY == 'playwright-e2e' }
+            }
+            steps {
+                dir("${WORKSPACE_DIR}") {
+                    sh '''
+                        npm install
+                        npx playwright install chromium
+                    '''
+                }
+            }
+        }
+
+        stage('Run Playwright Tests') {
+            when {
+                expression { params.TEST_CATEGORY == 'playwright-e2e' }
+            }
+            steps {
+                script {
+                    dir("${WORKSPACE_DIR}") {
+                        def testResult = sh(
+                            script: 'npm test 2>&1 | tee test-output.log',
+                            returnStatus: true
+                        )
+
+                        if (testResult != 0) {
+                            def failureLog = readFile('test-output.log').trim()
+                            echo "Tests failed. Triggering GitHub Actions triage..."
+                            triggerGitHubAction(failureLog, 'playwright-e2e', env.JOB_NAME)
+                            error("Playwright tests failed")
+                        }
+                    }
+                }
+            }
+        }
+
+        stage('Simulate EKS Failure') {
+            when {
+                expression { params.TEST_CATEGORY == 'eks-deploy' }
+            }
+            steps {
+                script {
+                    dir("${WORKSPACE_DIR}") {
+                        // Generate EKS failure log
+                        def failureLog = sh(
+                            script: """
+                                python3 scripts/gen_eks_log.py ${params.EKS_SCENARIO}
+                            """,
+                            returnStdout: true
+                        ).trim()
+
+                        echo "Generated EKS failure log:"
+                        echo failureLog
+
+                        // Trigger GitHub Actions
+                        triggerGitHubAction(failureLog, 'eks-deploy', env.JOB_NAME)
+
+                        error("EKS deployment failed (simulated)")
+                    }
+                }
+            }
+        }
+    }
+
+    post {
+        always {
+            echo 'Pipeline completed'
+        }
+        failure {
+            echo 'Pipeline failed - GitHub Action triage has been triggered'
+        }
+        success {
+            echo 'Pipeline succeeded'
+        }
+    }
+}
+
+def triggerGitHubAction(String logContent, String category, String jobName) {
+    // Escape log content for JSON
+    def escapedLog = logContent
+        .replaceAll('\\\\', '\\\\\\\\')
+        .replaceAll('"', '\\\\"')
+        .replaceAll('\\n', '\\\\n')
+        .replaceAll('\\r', '')
+
+    // Trigger via repository_dispatch
+    def payload = """
+    {
+        "event_type": "pipeline-failure",
+        "client_payload": {
+            "log": "${escapedLog}",
+            "category": "${category}",
+            "job": "jenkins-local-${jobName}",
+            "source": "jenkins-local",
+            "timestamp": "${new Date().format('yyyy-MM-dd HH:mm:ss')}"
+        }
+    }
+    """
+
+    // Write payload to file for debugging
+    writeFile file: 'github-dispatch-payload.json', text: payload
+
+    // Trigger GitHub Actions
+    def result = sh(
+        script: """
+            curl -X POST \
+              -H "Accept: application/vnd.github.v3+json" \
+              -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+              -H "Content-Type: application/json" \
+              https://api.github.com/repos/${GITHUB_REPO}/dispatches \
+              -d @github-dispatch-payload.json
+        """,
+        returnStatus: true
+    )
+
+    if (result == 0) {
+        echo "✓ Successfully triggered GitHub Actions triage workflow"
+        echo "View at: https://github.com/${GITHUB_REPO}/actions"
+    } else {
+        echo "⚠ Failed to trigger GitHub Actions (status: ${result})"
+    }
+}
