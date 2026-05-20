@@ -12,6 +12,7 @@ import json
 import subprocess
 import pathlib
 import requests
+import re
 import agent_tools
 
 
@@ -136,6 +137,72 @@ def apply_playwright_fix() -> tuple:
 
 
 # ── Draft PR ──────────────────────────────────────────────────────────────────
+
+def parse_rca(rca_text):
+    """Parse RCA text into structured sections"""
+    sections = {'cause': '', 'fix': '', 'confidence': 'Medium', 'steps': []}
+    lines = rca_text.split('\n')
+    current_section = None
+
+    for line in lines:
+        line_lower = line.lower().strip()
+        if 'root cause' in line_lower or 'what went wrong' in line_lower:
+            current_section = 'cause'
+            continue
+        elif 'recommended fix' in line_lower or 'solution' in line_lower or 'how to fix' in line_lower:
+            current_section = 'fix'
+            continue
+        elif 'confidence' in line_lower:
+            for level in ['high', 'medium', 'low']:
+                if level in line_lower:
+                    sections['confidence'] = level.capitalize()
+            continue
+        if re.match(r'^\d+\.', line.strip()):
+            sections['steps'].append(line.strip())
+            continue
+        if current_section and line.strip():
+            if sections[current_section]:
+                sections[current_section] += '\n' + line
+            else:
+                sections[current_section] = line
+
+    for key in ['cause', 'fix']:
+        sections[key] = sections[key].strip()
+    return sections
+
+
+def truncate_smart(text, max_length=400):
+    """Intelligently truncate text while preserving meaning"""
+    if len(text) <= max_length:
+        return text
+    truncated = text[:max_length]
+    last_period = truncated.rfind('.')
+    last_newline = truncated.rfind('\n')
+    cut_point = max(last_period, last_newline)
+    if cut_point > max_length * 0.7:
+        return truncated[:cut_point + 1] + " [...]"
+    return truncated + "..."
+
+
+def get_severity_color(error_class):
+    """Map error type to color for visual emphasis"""
+    critical_errors = ['OOMKilled', 'CrashLoopBackOff', 'AssertionError']
+    warning_errors = ['TimeoutError', 'ReadinessProbeFailed']
+    if error_class in critical_errors:
+        return 'Attention'
+    elif error_class in warning_errors:
+        return 'Warning'
+    return 'Default'
+
+
+def get_priority_emoji(confidence):
+    """Visual indicator for confidence/priority"""
+    if confidence == 'High':
+        return '🔴'
+    elif confidence == 'Medium':
+        return '🟡'
+    return '🟢'
+
 
 def create_draft_pr(branch: str, commit_msg: str, files: list,
                     rca: str, error_class: str, token: str) -> str:
@@ -263,6 +330,12 @@ def main():
     if not teams_webhook:
         print("  TEAMS_WEBHOOK not set — skipping.")
     else:
+        # Parse RCA into structured sections
+        sections = parse_rca(rca)
+        severity_color = get_severity_color(error_class)
+        priority_emoji = get_priority_emoji(sections['confidence'])
+
+        # Create enhanced readable card
         card = {
             "type": "message",
             "attachments": [{
@@ -270,48 +343,171 @@ def main():
                 "content": {
                     "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
                     "type": "AdaptiveCard",
-                    "version": "1.4",
+                    "version": "1.5",
                     "body": [
+                        # Header
                         {
-                            "type": "TextBlock",
-                            "text": f"Pipeline Failure — {job}",
-                            "weight": "Bolder",
-                            "size": "Medium",
-                            "color": "Attention",
+                            "type": "Container",
+                            "style": "emphasis",
+                            "items": [{
+                                "type": "ColumnSet",
+                                "columns": [
+                                    {
+                                        "type": "Column",
+                                        "width": "auto",
+                                        "items": [{
+                                            "type": "Image",
+                                            "url": "https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png",
+                                            "size": "Small",
+                                            "width": "32px"
+                                        }]
+                                    },
+                                    {
+                                        "type": "Column",
+                                        "width": "stretch",
+                                        "items": [
+                                            {
+                                                "type": "TextBlock",
+                                                "text": "❌ Pipeline Failure Detected",
+                                                "weight": "Bolder",
+                                                "size": "Large",
+                                                "color": severity_color,
+                                            },
+                                            {
+                                                "type": "TextBlock",
+                                                "text": f"{job}",
+                                                "size": "Small",
+                                                "spacing": "None",
+                                            }
+                                        ]
+                                    },
+                                    {
+                                        "type": "Column",
+                                        "width": "auto",
+                                        "items": [{
+                                            "type": "TextBlock",
+                                            "text": priority_emoji,
+                                            "size": "ExtraLarge",
+                                            "horizontalAlignment": "Right",
+                                        }]
+                                    }
+                                ]
+                            }]
                         },
+                        # Quick facts
                         {
-                            "type": "FactSet",
-                            "facts": [
-                                {"title": "Job",      "value": job},
-                                {"title": "Branch",   "value": branch},
-                                {"title": "Category", "value": category},
-                                {"title": "Error",    "value": error_class},
-                            ],
-                        },
-                        {
-                            "type": "TextBlock",
-                            "text": "RCA & Recommended Fix",
-                            "weight": "Bolder",
+                            "type": "Container",
                             "separator": True,
+                            "spacing": "Medium",
+                            "items": [{
+                                "type": "FactSet",
+                                "facts": [
+                                    {"title": "🌿 Branch", "value": branch[:50]},
+                                    {"title": "📦 Category", "value": category},
+                                    {"title": "⚠️ Error Type", "value": error_class},
+                                    {"title": "🎯 Confidence", "value": f"{sections['confidence']} {priority_emoji}"},
+                                ]
+                            }]
                         },
+                        # Root cause
                         {
-                            "type": "TextBlock",
-                            "text": rca,
-                            "wrap": True,
+                            "type": "Container",
+                            "separator": True,
+                            "spacing": "Medium",
+                            "style": "accent",
+                            "items": [
+                                {
+                                    "type": "TextBlock",
+                                    "text": "🔍 Root Cause",
+                                    "weight": "Bolder",
+                                    "size": "Medium",
+                                },
+                                {
+                                    "type": "TextBlock",
+                                    "text": truncate_smart(sections['cause'], 350) if sections['cause'] else "Analyzing...",
+                                    "wrap": True,
+                                    "spacing": "Small",
+                                }
+                            ]
                         },
-                    ],
-                    "actions": [
+                        # Recommended fix
+                        {
+                            "type": "Container",
+                            "separator": True,
+                            "spacing": "Medium",
+                            "items": [
+                                {
+                                    "type": "TextBlock",
+                                    "text": "💡 Recommended Fix",
+                                    "weight": "Bolder",
+                                    "size": "Medium",
+                                },
+                                {
+                                    "type": "TextBlock",
+                                    "text": truncate_smart(sections['fix'], 350) if sections['fix'] else "See PR for details",
+                                    "wrap": True,
+                                    "spacing": "Small",
+                                }
+                            ]
+                        },
+                        # Action steps (if available)
                         *([{
-                            "type": "Action.OpenUrl",
-                            "title": "View Auto-fix PR",
-                            "url": pr_url,
-                        }] if pr_url else []),
-                        *([{
-                            "type": "Action.OpenUrl",
-                            "title": "View Actions Run",
-                            "url": actions_run_url,
-                        }] if actions_run_url else []),
+                            "type": "Container",
+                            "separator": True,
+                            "spacing": "Medium",
+                            "items": [
+                                {
+                                    "type": "TextBlock",
+                                    "text": "📋 Action Steps",
+                                    "weight": "Bolder",
+                                    "size": "Medium",
+                                },
+                                *[{
+                                    "type": "TextBlock",
+                                    "text": step,
+                                    "wrap": True,
+                                    "spacing": "Small",
+                                } for step in sections['steps'][:3]]
+                            ]
+                        }] if sections['steps'] else []),
+                        # Status footer
+                        {
+                            "type": "Container",
+                            "separator": True,
+                            "spacing": "Medium",
+                            "items": [{
+                                "type": "ColumnSet",
+                                "columns": [
+                                    {
+                                        "type": "Column",
+                                        "width": "stretch",
+                                        "items": [{
+                                            "type": "TextBlock",
+                                            "text": f"{'✅ Auto-fix PR created' if pr_url else '⚠️ Manual fix required'}",
+                                            "size": "Small",
+                                            "weight": "Bolder",
+                                            "color": "Good" if pr_url else "Warning",
+                                        }]
+                                    },
+                                    {
+                                        "type": "Column",
+                                        "width": "auto",
+                                        "items": [{
+                                            "type": "TextBlock",
+                                            "text": "🤖 AI Triage Agent",
+                                            "size": "Small",
+                                            "color": "Accent",
+                                            "horizontalAlignment": "Right",
+                                        }]
+                                    }
+                                ]
+                            }]
+                        }
                     ],
+                    "actions": [a for a in [
+                        {"type": "Action.OpenUrl", "title": "📝 View PR", "url": pr_url, "style": "positive"} if pr_url else None,
+                        {"type": "Action.OpenUrl", "title": "🔗 Full Analysis", "url": actions_run_url} if actions_run_url else None,
+                    ] if a is not None]
                 },
             }],
         }
