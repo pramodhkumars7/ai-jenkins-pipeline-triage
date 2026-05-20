@@ -277,55 +277,40 @@ def main():
                     },
                     "body": [
                         {
-                            "type": "Container",
-                            "style": "emphasis",
-                            "bleed": True,
-                            "items": [
-                                {
-                                    "type": "TextBlock",
-                                    "text": f"Pipeline Failure — {job}",
-                                    "weight": "Bolder",
-                                    "size": "Large",
-                                    "color": "Attention",
-                                    "wrap": True,
-                                }
+                            "type": "TextBlock",
+                            "text": f"Pipeline Failure — {job}",
+                            "weight": "Bolder",
+                            "size": "Large",
+                            "color": "Attention",
+                            "wrap": True,
+                            "separator": False,
+                            "spacing": "None"
+                        },
+                        {
+                            "type": "FactSet",
+                            "separator": True,
+                            "spacing": "Medium",
+                            "facts": [
+                                {"title": "Job",      "value": job},
+                                {"title": "Branch",   "value": branch},
+                                {"title": "Category", "value": category},
+                                {"title": "Error",    "value": error_class},
                             ]
                         },
                         {
-                            "type": "Container",
+                            "type": "TextBlock",
+                            "text": "RCA & Recommended Fix",
+                            "weight": "Bolder",
+                            "size": "Medium",
                             "separator": True,
-                            "spacing": "Medium",
-                            "items": [
-                                {
-                                    "type": "FactSet",
-                                    "facts": [
-                                        {"title": "Job",      "value": job},
-                                        {"title": "Branch",   "value": branch},
-                                        {"title": "Category", "value": category},
-                                        {"title": "Error",    "value": error_class},
-                                    ],
-                                }
-                            ]
+                            "spacing": "Medium"
                         },
                         {
-                            "type": "Container",
-                            "separator": True,
-                            "spacing": "Medium",
-                            "items": [
-                                {
-                                    "type": "TextBlock",
-                                    "text": "RCA & Recommended Fix",
-                                    "weight": "Bolder",
-                                    "size": "Medium",
-                                },
-                                {
-                                    "type": "TextBlock",
-                                    "text": rca,
-                                    "wrap": True,
-                                    "spacing": "Small",
-                                }
-                            ]
-                        },
+                            "type": "TextBlock",
+                            "text": rca,
+                            "wrap": True,
+                            "spacing": "Small"
+                        }
                     ],
                     "actions": [
                         *([{
